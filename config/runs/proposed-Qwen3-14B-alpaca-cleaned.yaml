@@ -1,0 +1,33 @@
+run_id: proposed-Qwen3-14B-alpaca-cleaned
+method: CASS-OC (Compute-Aware Shape Scheduler with Online Cost Adaptation)
+model:
+  name: Qwen3-14B
+dataset:
+  name: alpaca-cleaned
+  split_ratio:
+    train: 0.9
+    validation: 0.05
+    test: 0.05
+  preprocessing:
+    max_length: 2048
+training:
+  learning_rate: 1e-4
+  batch_size: 4
+  epochs: 1
+  optimizer: adamw
+  warmup_steps: 100
+optuna:
+  n_trials: 12
+  search_spaces:
+    - param_name: lambda_init
+      distribution_type: uniform
+      low: 0.1
+      high: 2.0
+    - param_name: eta
+      distribution_type: uniform
+      low: 0.01
+      high: 0.2
+    - param_name: time_feature_weight
+      distribution_type: uniform
+      low: 0.5
+      high: 3.0

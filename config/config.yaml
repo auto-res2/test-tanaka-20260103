@@ -1,0 +1,8 @@
+# config/config.yaml
+# Base Hydra configuration. Individual run YAMLs reside in config/runs/*.yaml and are
+# loaded dynamically by src/main.py.
+
+wandb:
+  entity: toma_tanaka
+  project: 2026-01-03
+  mode: online  # switched to "disabled" in trial mode
