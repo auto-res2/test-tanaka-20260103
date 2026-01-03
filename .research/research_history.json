@@ -69,5 +69,81 @@
     "experimental_code": "# Lightweight Python prototype: compute-aware shape scheduling with online cost adaptation\nimport math\nimport random\nimport numpy as np\n\n# Synthetic error-vs-compute model per shape (toy scaling-law)\n# E_P(C) = a_p*(C + d_p)**(-b_p) + c_p\nshapes = {\n    'S': {'a': 0.45, 'd': 5.0, 'b': 0.55, 'c': 0.05, 'base_time': 1.0},  # cheap\n    'M': {'a': 0.30, 'd': 6.0, 'b': 0.60, 'c': 0.08, 'base_time': 2.0},  # moderate\n    'L': {'a': 0.22, 'd': 7.0, 'b': 0.70, 'c': 0.12, 'base_time': 3.5}, # expensive\n}\nC_total = 100.0  # abstract total compute budget\n\n# Online cost estimator (simple moving-average regressor over shape features)\nshape_features = {\n    'S': np.array([1.0]),  # feature: relative size\n    'M': np.array([2.0]),\n    'L': np.array([3.0]),\n}\n# initialize time estimator parameters (intercept, slope per feature)\n# time = w0 + w1 * feature\nw = np.array([0.0, 0.0])\n\n# online penalty weight\nlambda_t = 0.5\neta = 0.05  # lambda learning rate\n\ndef E_of_P(name, C):\n    p = shapes[name]\n    return p['a'] * (C + p['d']) ** (-p['b']) + p['c']\n\ndef predict_time(name):\n    feat = shape_features[name]\n    # simple linear predictor: time = w0 + w1 * feat\n    return max(0.1, w[0] + w[1] * float(feat[0]))\n\ndef simulate_actual_time(name):\n    base = shapes[name]['base_time']\n    # add some noise simulating hardware variability\n    noise = random.uniform(0.9, 1.1)\n    return base * noise\n\ndef update_time_model(name, observed_time):\n    global w\n    feat = float(shape_features[name][0])\n    pred = w[0] + w[1] * feat\n    error = observed_time - pred\n    lr = 0.1\n    w[0] += lr * error\n    w[1] += lr * error * feat\n\n# online decision: select next shape that minimizes E_P(C_remaining) + lambda_t * time_P\n# perform a simple planning loop\nC_remain = C_total\nschedule = []\naccuracy_progress = []  # track surrogate accuracy\nwhile C_remain > 0.0:\n    # compute scores for each shape\n    scores = {}\n    for name in shapes.keys():\n        E = E_of_P(name, C_remain)\n        t_hat = max(0.1, predict_time(name))\n        scores[name] = E + lambda_t * t_hat\n    choice = min(scores, key=scores.get)\n    # simulate executing one transition (shape change consumes some compute proportional to its time)\n    actual_time = simulate_actual_time(choice)\n    update_time_model(choice, actual_time)\n    # consume a chunk of compute proportional to time\n    compute_used = min(C_remain, actual_time)\n    C_remain -= compute_used\n    schedule.append((choice, compute_used))\n    # simulate accuracy gain for this transition (using the error model)\n    acc_before = 1.0 - E_of_P(choice, C_remain + compute_used)\n    acc_after = 1.0 - E_of_P(choice, C_remain)\n    delta_acc = max(0.0, acc_after - acc_before)\n    # update lambda to optimize throughput (increase if gains per time are good, decrease otherwise)\n    if actual_time > 0:\n        throughput = delta_acc / actual_time\n        lambda_t = max(0.0, lambda_t + eta * (throughput - 0.01))\n    # record\n    accuracy_progress.append(delta_acc)\n\n# compute final surrogate accuracy as 1 - E at end of budget for the last chosen shape\nfinal_E = min(E_of_P(name, C_remain if C_remain>0 else 0.0) for name in shapes)\nfinal_accuracy = max(0.0, (1.0 - final_E) * 100.0)\n\nprint(\"Schedule:\", schedule)\nprint(\"Final surrogate accuracy:\", round(final_accuracy, 2), \"%\")\nprint(\"Final lambda:\", round(lambda_t, 4))\nprint(\"Final time-constant predictor w:\", w)\n",
     "expected_result": "- The online-cost-adaptive scheduler (CASS-OC) should achieve final accuracy close to the base scheduling method (within ~0.5–1.5 percentage points in the toy setting) while reducing total compute by a meaningful margin (e.g., 10–30%) due to preferring cheaper shapes when cost is not compensated by large accuracy gains. - Across multiple runs with hardware noise, CASS-OC should exhibit lower variance in final accuracy and more stable compute usage than a fixed lambda policy, demonstrating robustness to hardware variability. - The experiment should show that the online adaptation of lambda_t and time_P improves compute efficiency with comparable accuracy, and that the method generalizes to the additional shape dimension (e.g., context length) in the toy or small-scale setting.",
     "expected_conclusion": "The refined hypothesis demonstrates a novel, practical, and broadly applicable approach to efficient LLM training: a lightweight, online, hardware-aware shaping scheduler that learns shape transition costs from real-time measurements and adapts the penalty dynamically. By coupling a scalable, interpretable error model with an online cost estimator and a feedback-driven lambda, the method addresses key gaps in static scheduling while remaining compatible with existing training pipelines. This yields tangible compute savings with minimal or negligible accuracy loss, offering immediate societal and environmental benefits through reduced training energy and cost, and providing a robust, generalizable framework for hardware-aware optimization in diverse model families and tasks."
+  },
+  "experimental_design": {
+    "experiment_summary": "We design and run a tightly-scoped demonstration of the Compute-Aware Shape Scheduler with Online Cost Adaptation (CASS-OC) to show how online cost feedback and dynamic penalties can steer shape transitions toward compute-efficient configurations without sacrificing accuracy. The experiment uses a toy but representative three-shape setting (S, M, L corresponding to small/medium/large shapes) with synthetic error-vs-compute curves E_P(C) and a lightweight online time estimator time_P that learns from observed runtimes and hardware variability. The scheduler selects the next shape P* at each step by minimizing Score(P) = E_P + lambda_t * time_P, where lambda_t is updated online based on observed throughput (accuracy gain per unit time). We simulate hardware variability and cross-seed noise to mimic wall-clock and energy fluctuations, and we perform multiple replicates to quantify robustness. The experiment scale is deliberately small to fit Runner resources (GPU-runner with A100/H200-class hardware): 3 shapes, a total abstract compute budget C_total = 100 units per run, and 5 independent seeds. The toy framework mirrors the core dynamics of real training schedules (shape changes, cost-aware decisions, online cost adaptation) while remaining reproducible and runnable on modest compute. The section also describes how a small-scale real-world proxy (optional) could extend the toy framework to near-term hardware measurements, should more resources be available. The workflow is self-contained and provides a path to reproduce the results using lightweight Python code, ensuring accessibility and reproducibility on the provided Runner. ",
+    "runner_config": {
+      "runner_label": [
+        "self-hosted",
+        "gpu-runner"
+      ],
+      "description": "NVIDIA A100 or H200, VRAM: 80 GB or more, RAM: 2048 GB or more"
+    },
+    "evaluation_metrics": [
+      {
+        "name": "final_accuracy_at_budget",
+        "description": "Correctness criteria: final surrogate accuracy achieved when the compute budget is exhausted (C_remain <= 0). Calculation method: final_accuracy = max(0, min(100, (1.0 - E_of_P(last_shape_used, 0.0)) * 100)). This uses the toy E_P(C) model at zero remaining budget. Task appropriateness: directly measures the goal of the hypothesis—achieving high accuracy within a fixed compute budget. Visualizations: a line chart showing accuracy versus cumulative budget spent, with markers for baseline and CASS-OC runs."
+      },
+      {
+        "name": "compute_efficiency_gain",
+        "description": "Correctness criteria: relative compute savings compared with a baseline (base scaling-law scheduler). Calculation method: efficiency_gain = (compute_baseline - compute_cassoc) / compute_baseline, where compute_* is the total compute consumed (budget spent) until C_total is exhausted. Task appropriateness: captures the primary benefit of online cost adaptation. Visualizations: bar chart of compute usage for baseline vs CASS-OC across seeds."
+      },
+      {
+        "name": "wall_clock_time",
+        "description": "Correctness criteria: total wall-clock time elapsed per run until budget exhaustion. Calculation method: sum of simulated transition times (actual_time per step) across the run. Task appropriateness: reflects real-time overheads due to online adaptation and shape transitions. Visualizations: stacked/total time across seeds; time per transition by shape name."
+      },
+      {
+        "name": "energy_proxy",
+        "description": "Correctness criteria: proxy energy consumption derived from time_P and assumed per-shape power estimates. Calculation method: energy_proxy = sum(actual_time * power_per_shape[shape]), using a simple, fixed power profile per shape. Task appropriateness: aligns with the societal goal of reducing energy usage; provides a hardware-feasible metric without requiring hardware power meters. Visualizations: energy vs budget and per-shape energy breakdown."
+      },
+      {
+        "name": "robustness_variance_across_seeds",
+        "description": "Correctness criteria: variability of final_accuracy_at_budget across seeds. Calculation method: compute the mean and standard deviation (or coefficient of variation) of final_accuracy_at_budget across runs; report CV. Task appropriateness: demonstrates robustness to hardware variability and random initialization/noise seeds. Visualizations: violin/boxplot of final accuracy across seeds."
+      }
+    ],
+    "models_to_use": [
+      "Qwen3-14B"
+    ],
+    "datasets_to_use": [
+      "alpaca-cleaned"
+    ],
+    "proposed_method": {
+      "method_name": "CASS-OC (Compute-Aware Shape Scheduler with Online Cost Adaptation)",
+      "description": "A lightweight, online-cost-aware extension to a shape-scheduler that (i) retains a shape-agnostic error predictor E_P(C) for each shape P, (ii) learns a lightweight online time estimator time_P from observed runtimes and shape features, (iii) uses a dynamic penalty lambda_t to trade predicted accuracy gains against actual costs, and (iv) performs multi-dimension shape transitions with minimal changes to the training loop. The method continuously updates the cost model after each shape transition via a simple regression (moving-average style) and adjusts lambda_t based on observed throughput. It enables hardware-aware scheduling without architectural changes or large-scale retraining, and it generalizes across shape dimensions and hardware with lightweight online adaptation. Novelty lies in (i) online, data-driven cost adaptation integrated into the scheduling objective, (ii) a feedback-driven, online lambda tuner, and (iii) multi-dimension shape transitions using stable, interpretable encodings. The toy demonstration captures the core dynamics and provides a path to real hardware deployment with minor integration effort.",
+      "optuna_config": {
+        "enabled": true,
+        "n_trials": 12,
+        "search_spaces": [
+          {
+            "param_name": "lambda_init",
+            "distribution_type": "uniform",
+            "low": 0.1,
+            "high": 2.0
+          },
+          {
+            "param_name": "eta",
+            "distribution_type": "uniform",
+            "low": 0.01,
+            "high": 0.2
+          },
+          {
+            "param_name": "time_feature_weight",
+            "distribution_type": "uniform",
+            "low": 0.5,
+            "high": 3.0
+          }
+        ]
+      }
+    },
+    "comparative_methods": [
+      {
+        "method_name": "Base scaling-law scheduler (E_P only)",
+        "description": "Standard baseline: minimize predicted error E_P(C) at each decision without any online cost adaptation or lambda tuning. It uses the same E_P formulation but treats time as a fixed, non-adaptive penalty or ignores it entirely. Training_config\":null,",
+        "optuna_config": {
+          "enabled": false,
+          "n_trials": 0
+        }
+      }
+    ]
   }
 }
